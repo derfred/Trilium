@@ -97,7 +97,8 @@ export async function buildEventsForCalendar(note: FNote, e: EventSourceFuncInfo
 
     // Request all the date notes.
     const dateNotes = await froca.getNotes(allDateNoteIds);
-    const childNoteToDateMapping: Record<string, string> = {};
+    // The days each child of a day note hangs from: more than one where it is cloned under several.
+    const childNoteToDates: Record<string, string[]> = {};
     for (const dateNote of dateNotes) {
         const startDate = dateNote.getLabelValue("dateNote");
         if (!startDate) {
@@ -110,21 +111,42 @@ export async function buildEventsForCalendar(note: FNote, e: EventSourceFuncInfo
         if (dateNote.hasChildren()) {
             const childNoteIds = dateNote.getChildNoteIds();
             for (const childNoteId of childNoteIds) {
-                childNoteToDateMapping[childNoteId] = startDate;
+                (childNoteToDates[childNoteId] ??= []).push(startDate);
             }
         }
     }
 
     // Request all child notes of date notes in a single run.
-    const childNoteIds = Object.keys(childNoteToDateMapping);
+    const childNoteIds = Object.keys(childNoteToDates);
     const childNotes = await froca.getNotes(childNoteIds);
     for (const childNote of childNotes) {
-        const startDate = childNoteToDateMapping[childNote.noteId];
-        const event = await buildEvent(childNote, { startDate });
-        events.push(event);
+        events.push(await buildEvent(childNote, journalChildEvent(childNote, childNoteToDates[childNote.noteId])));
     }
 
     return events.flat();
+}
+
+/**
+ * When a child of a day note happens. Its day is the day note's, as ever; its hours are its own
+ * #startTime and #endTime (or whatever labels it renames them to), as on any other calendar, so a
+ * meeting filed under the day it is held on stands in the time grid rather than above it.
+ *
+ * A note cloned under several day notes — an event spanning them, filed under each — is drawn once,
+ * from the day it says it starts on, and then for as long as its own #endDate says. Under any other
+ * day note it is a one-day event: an end date reckoned from another start would draw it backwards.
+ */
+export function journalChildEvent(note: FNote, dates: string[]): Event {
+    const ownStartDate = getCustomisableLabel(note, "startDate", "calendar:startDate");
+    const startsOnItsOwnDay = !!ownStartDate && dates.includes(ownStartDate);
+    const startDate = startsOnItsOwnDay ? ownStartDate : [...dates].sort()[0];
+
+    return {
+        startDate,
+        endDate: startsOnItsOwnDay ? getCustomisableLabel(note, "endDate", "calendar:endDate") : null,
+        startTime: getCustomisableLabel(note, "startTime", "calendar:startTime"),
+        endTime: getCustomisableLabel(note, "endTime", "calendar:endTime"),
+        isArchived: note.hasLabel("archived")
+    };
 }
 
 export async function buildEvent(note: FNote, {
