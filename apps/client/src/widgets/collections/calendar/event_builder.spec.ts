@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { buildNote, buildNotes } from "../../../test/easy-froca.js";
-import { buildEvent, buildEvents } from "./event_builder.js";
+import { buildEvent, buildEvents, journalChildEvent } from "./event_builder.js";
+import froca from "../../../services/froca.js";
 import { LOCALE_MAPPINGS } from "./index.js";
 import { isValidDuration, parseDurationSeconds } from "./utils.js";
 import { LOCALES } from "@triliumnext/commons";
@@ -221,6 +222,61 @@ describe("Promoted attributes", () => {
 
 });
 
+
+describe("Children of day notes", () => {
+    async function journalEvents(noteId: string, dates: string[]) {
+        const note = froca.notes[noteId];
+        return buildEvent(note, journalChildEvent(note, dates));
+    }
+
+    it("draws a child with times in the time grid, on its day note's day", async () => {
+        const [ noteId ] = buildNotes([ { title: "Standup", "#startTime": "09:30", "#endTime": "11:00" } ]);
+        const events = await journalEvents(noteId, [ "2025-05-05" ]);
+
+        expect(events).toHaveLength(1);
+        expect(events[0]).toMatchObject({ start: "2025-05-05T09:30:00", end: "2025-05-05T11:00:00", allDay: false });
+    });
+
+    it("keeps a child without times a whole day, as before", async () => {
+        const [ noteId ] = buildNotes([ { title: "Notes" } ]);
+        const events = await journalEvents(noteId, [ "2025-05-05" ]);
+
+        expect(events[0]).toMatchObject({ start: "2025-05-05", end: "2025-05-06", allDay: true });
+    });
+
+    it("takes the day from the day note, not from a start date of the child's own", async () => {
+        const [ noteId ] = buildNotes([ { title: "Moved", "#startDate": "2025-05-01", "#startTime": "08:00", "#endTime": "09:00" } ]);
+        const events = await journalEvents(noteId, [ "2025-05-05" ]);
+
+        expect(events[0]).toMatchObject({ start: "2025-05-05T08:00:00", end: "2025-05-05T09:00:00" });
+    });
+
+    it("draws a child cloned under each day it spans once, from the day it starts on, to its own end", async () => {
+        const [ noteId ] = buildNotes([ { title: "Trip", "#startDate": "2025-05-06", "#endDate": "2025-05-08" } ]);
+        const events = await journalEvents(noteId, [ "2025-05-08", "2025-05-06", "2025-05-07" ]);
+
+        expect(events).toHaveLength(1);
+        expect(events[0]).toMatchObject({ start: "2025-05-06", end: "2025-05-09", allDay: true });
+    });
+
+    it("spans a timed event past midnight to its own end date", async () => {
+        const [ noteId ] = buildNotes([ {
+            title: "Night shift", "#startDate": "2025-05-05", "#endDate": "2025-05-06", "#startTime": "22:00", "#endTime": "06:00"
+        } ]);
+        const events = await journalEvents(noteId, [ "2025-05-05", "2025-05-06" ]);
+
+        expect(events[0]).toMatchObject({ start: "2025-05-05T22:00:00", end: "2025-05-06T06:00:00" });
+    });
+
+    it("honours the labels a child renames its times to", async () => {
+        const [ noteId ] = buildNotes([ {
+            title: "Renamed", "#calendar:startTime": "from", "#from": "07:15", "#calendar:endTime": "to", "#to": "07:45"
+        } ]);
+        const events = await journalEvents(noteId, [ "2025-05-05" ]);
+
+        expect(events[0]).toMatchObject({ start: "2025-05-05T07:15:00", end: "2025-05-05T07:45:00" });
+    });
+});
 
 describe("Recurrence", () => {
     it("supports valid recurrence without end date", async () => {
